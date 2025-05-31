@@ -44,11 +44,26 @@ scraper.log
 output/
 data/
 temp/
+scraped_data/
 *.csv
 *.json
 *.xlsx
 *.db
 *.sqlite3
+*.html
+*.xml
+
+# Chrome/Browser Data
+chromedriver
+chromedriver.exe
+geckodriver
+*.crdownload
+
+# Analysis Files
+*_analysis.json
+*_analysis.html
+pagination_analysis.*
+product_page_analysis.*
 
 # Configuration
 .env
@@ -89,3 +104,82 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+
+# Backup files
+*_backup.py
+*_old.py
+*_new.py
+*.backup
+*.bak
+
+# Specific backup and alternative versions
+gjirafa_scraper_backup.py
+gjirafa_scraper_new.py
+gjirafa_scraper_old.py
+
+# Temporary testing files
+test_*.json
+test_*.csv
+test_*.html
+debug_*.py
+temp_*.py
+
+# Development and Analysis Scripts
+analyze_*.py
+test_*.py
+show_*.py
+examples.py
+
+# Specific analysis and test files
+analyze_advanced.py
+analyze_pagination.py
+analyze_product_page.py
+analyze_products.py
+analyze_site.py
+analyze_structure.py
+test_api.py
+test_category.py
+test_chromedriver.py
+test_complete.py
+test_pagination.py
+test_simple.py
+show_categories.py
+
+# Selenium Downloads and Cache
+Downloads/
+selenium-cache/
+webdriver-cache/
+
+# Analysis and Debug Files
+analysis_results/
+debug_output/
+screenshots/
+
+# Development artifacts
+.vscode/settings.json
+.vscode/launch.json
+.env.local
+.env.development
+.env.production
+
+# Chrome User Data
+chrome-user-data/
+user-data-dir/
+
+# Jupyter Notebook outputs
+*.ipynb_checkpoints/
+.ipynb_checkpoints/
+
+# System files
+*.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+ehthumbs.db
+Desktop.ini
+
+# Error logs and debug files
+error.log
+debug.log
+selenium.log
+webdriver.log

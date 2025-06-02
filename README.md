@@ -434,20 +434,6 @@ logging.basicConfig(
 - Analyze dashboard usage patterns
 - Monitor system resource usage
 
-## 🤝 Contributing
-
-### Development Setup
-1. Fork the repository
-2. Create feature branch: `git checkout -b feature/new-feature`
-3. Install development dependencies: `pip install -r requirements-dev.txt`
-4. Run tests: `pytest tests/`
-5. Submit pull request
-
-### Code Style
-- Follow PEP 8 guidelines
-- Use type hints where possible
-- Add docstrings to all functions
-- Include unit tests for new features
 
 ## 🙏 Acknowledgments
 
@@ -461,7 +447,6 @@ logging.basicConfig(
 ## 📞 Support
 
 For support and questions:
-- 📧 Email: your.email@example.com
 - 🐛 Issues: [GitHub Issues](https://github.com/bonin1/data-retrieval/issues)
 ---
 

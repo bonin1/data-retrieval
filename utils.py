@@ -105,7 +105,6 @@ class DataValidator:
                             value = parts[1].strip()
                             if key and value:
                                 specs[key] = value
-        
         except Exception as e:
             logger.error(f"Error extracting specifications: {e}")
         
@@ -152,13 +151,13 @@ class DataValidator:
         
         try:
             rating = float(product.get('rating', 0)) if product.get('rating') else None
-            validated['rating'] = rating if rating and 0 <= rating <= 5 else None
+            validated['rating'] = rating if rating is not None and 0 <= rating <= 5 else None
         except (ValueError, TypeError):
             validated['rating'] = None
         
         try:
             reviews_count = int(product.get('reviews_count', 0)) if product.get('reviews_count') else None
-            validated['reviews_count'] = reviews_count if reviews_count and reviews_count >= 0 else None
+            validated['reviews_count'] = reviews_count if reviews_count is not None and reviews_count >= 0 else None
         except (ValueError, TypeError):
             validated['reviews_count'] = None
         

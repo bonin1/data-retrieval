@@ -52,6 +52,13 @@ scraped_data/
 *.sqlite3
 *.html
 *.xml
+/sample_pipeline_output
+/pipeline_output
+/test_output
+/visualizations
+/catboost_output
+/catboost_info
+/dashboard_output
 
 # Chrome/Browser Data
 chromedriver
@@ -64,6 +71,7 @@ geckodriver
 *_analysis.html
 pagination_analysis.*
 product_page_analysis.*
+/integration_test.py
 
 # Configuration
 .env

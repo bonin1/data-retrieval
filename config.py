@@ -72,19 +72,20 @@ SELECTORS = {
         ".product-header h1",
         "h1"
     ],
-    
-    "price": [
-        ".price-current",
-        ".product-price .current",
-        "[data-testid='product-price']",
-        ".price-now",
+      "price": [
+        ".product-price",
+        ".prices",
+        "[class*='price-value']",
         ".current-price",
+        ".price-current",
+        ".price-now",
         ".price"
     ],
-    
-    "original_price": [
+      "original_price": [
+        ".non-discounted-price",
+        ".line-through",
+        "[class*='price-value']",
         ".price-original",
-        ".product-price .original",
         ".old-price",
         ".price-before",
         ".original-price"
@@ -142,15 +143,18 @@ SELECTORS = {
         ".product-category",
         "[data-testid='breadcrumb']"
     ],
-    
-    "rating": [
-        ".rating",
+      "rating": [
+        ".ratingsAndReviews",
+        "[class*='rating']",
+        "[class*='star']",
         ".product-rating",
         "[data-testid='rating']",
         ".stars"
     ],
-    
-    "reviews_count": [
+      "reviews_count": [
+        ".product-reviews-overview",
+        ".product-no-reviews",
+        "[class*='ratingsAndReviews']",
         ".reviews-count",
         ".review-count",
         "[data-testid='reviews-count']"

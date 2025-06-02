@@ -389,8 +389,8 @@ class GjirafaScraper:
             
             product_data['title'] = self._extract_by_selectors(soup, SELECTORS["title"])
             
-            product_data['price'] = self._extract_by_selectors(soup, SELECTORS["price"])
-            product_data['original_price'] = self._extract_by_selectors(soup, SELECTORS["original_price"])
+            product_data['price'] = self._extract_price_smart(soup)
+            product_data['original_price'] = self._extract_original_price_smart(soup)
             
             product_data['description'] = self._extract_by_selectors(soup, SELECTORS["description"])
             
@@ -401,8 +401,8 @@ class GjirafaScraper:
             product_data['brand'] = self._extract_by_selectors(soup, SELECTORS["brand"])
             product_data['category'] = self._extract_category(soup)
             product_data['availability'] = self._extract_by_selectors(soup, SELECTORS["availability"])
-            product_data['rating'] = self._extract_by_selectors(soup, SELECTORS["rating"])
-            product_data['reviews_count'] = self._extract_by_selectors(soup, SELECTORS["reviews_count"])
+            product_data['rating'] = self._extract_rating_smart(soup)
+            product_data['reviews_count'] = self._extract_reviews_count_smart(soup)
             
             validated_data = DataValidator.validate_product_data(product_data)
             
@@ -425,7 +425,200 @@ class GjirafaScraper:
                 continue
         return ""
     
+    def _extract_price_smart(self, soup: BeautifulSoup) -> Optional[str]:
+        """Smart price extraction that handles complex price structures"""
+        
+        # First try to find specific discounted price
+        discounted_selectors = [
+            ".prices .text-green-600",
+            ".prices [class*='green']", 
+            ".current-price",
+            ".sale-price"
+        ]
+        
+        for selector in discounted_selectors:
+            try:
+                element = soup.select_one(selector)
+                if element:
+                    price_text = element.get_text(strip=True)
+                    # Extract just the price number with €
+                    import re
+                    price_match = re.search(r'(\d+(?:\.\d{2})?)\s*€', price_text)
+                    if price_match:
+                        return price_match.group(0)
+            except Exception:
+                continue
+        
+        # Try to extract from the main price container
+        price_containers = [
+            ".product-price",
+            ".prices"
+        ]
+        
+        for container_selector in price_containers:
+            try:
+                container = soup.select_one(container_selector)
+                if container:
+                    # Look for price patterns within the container
+                    price_text = container.get_text(strip=True)
+                    
+                    # Extract multiple prices and identify the current one
+                    import re
+                    prices = re.findall(r'(\d+(?:\.\d{2})?)\s*€', price_text)
+                    
+                    if len(prices) >= 2:
+                        # If multiple prices, the second one is usually the discounted price
+                        return f"{prices[1]} €"
+                    elif len(prices) == 1:
+                        # Single price
+                        return f"{prices[0]} €"
+            except Exception:
+                continue
+        
+        # Fallback to original method
+        return self._extract_by_selectors(soup, SELECTORS["price"])
+
+    def _extract_original_price_smart(self, soup: BeautifulSoup) -> Optional[str]:
+        """Smart original price extraction"""
+        
+        # Look for crossed-out prices
+        original_selectors = [
+            ".line-through",
+            ".non-discounted-price", 
+            "[class*='line-through']",
+            ".old-price",
+            ".was-price"
+        ]
+        
+        for selector in original_selectors:
+            try:
+                element = soup.select_one(selector)
+                if element:
+                    price_text = element.get_text(strip=True)
+                    import re
+                    price_match = re.search(r'(\d+(?:\.\d{2})?)\s*€', price_text)
+                    if price_match:
+                        return price_match.group(0)
+            except Exception:
+                continue
+        
+        # Try to extract from price container
+        price_containers = [
+            ".product-price",
+            ".prices"
+        ]
+        
+        for container_selector in price_containers:
+            try:
+                container = soup.select_one(container_selector)
+                if container:
+                    price_text = container.get_text(strip=True)
+                    
+                    # Extract multiple prices - first one is usually original
+                    import re
+                    prices = re.findall(r'(\d+(?:\.\d{2})?)\s*€', price_text)
+                    
+                    if len(prices) >= 2:
+                        # If multiple prices, first one is usually original
+                        return f"{prices[0]} €"
+            except Exception:
+                continue
+        
+        return self._extract_by_selectors(soup, SELECTORS["original_price"])
+
+    def _extract_rating_smart(self, soup: BeautifulSoup) -> Optional[str]:
+        """Smart rating extraction"""
+        
+        # Look for star ratings or numeric ratings
+        rating_selectors = [
+            ".ratingsAndReviews",
+            "[class*='rating']",
+            "[class*='star']"
+        ]
+        
+        for selector in rating_selectors:
+            try:
+                elements = soup.select(selector)
+                for element in elements:
+                    text = element.get_text(strip=True)
+                    
+                    # Look for rating patterns
+                    import re
+                    # Match patterns like "4.5", "4/5", "4 out of 5", etc.
+                    rating_patterns = [
+                        r'(\d+(?:\.\d+)?)\s*(?:/\s*5|\s*out\s*of\s*5)',  # 4.5/5 or 4.5 out of 5
+                        r'(\d+(?:\.\d+)?)\s*(?:stars?|★)',               # 4.5 stars or 4.5★
+                        r'(\d+(?:\.\d+)?)\s*(?:vlerësime?)',             # "4.5 vlerësime" (Albanian)
+                        r'(\d+(?:\.\d+)?)'                               # Just numbers
+                    ]
+                    
+                    for pattern in rating_patterns:
+                        match = re.search(pattern, text)
+                        if match:
+                            rating = float(match.group(1))
+                            if 0 <= rating <= 5:
+                                return str(rating)
+                    
+                    # Handle "00 Vlerësime" case - extract the rating part
+                    if "vlerësime" in text.lower():
+                        rating_match = re.search(r'(\d+(?:\.\d+)?)', text)
+                        if rating_match:
+                            rating = float(rating_match.group(1))
+                            if 0 <= rating <= 5:
+                                return str(rating)
+            except Exception:
+                continue
+        
+        return self._extract_by_selectors(soup, SELECTORS["rating"])
+
+    def _extract_reviews_count_smart(self, soup: BeautifulSoup) -> Optional[str]:
+        """Smart reviews count extraction"""
+        
+        review_selectors = [
+            ".product-reviews-overview",
+            ".product-no-reviews", 
+            ".ratingsAndReviews",
+            "[class*='review']"
+        ]
+        
+        for selector in review_selectors:
+            try:
+                elements = soup.select(selector)
+                for element in elements:
+                    text = element.get_text(strip=True)
+                    
+                    # Look for review count patterns
+                    import re
+                    patterns = [
+                        r'(\d+)\s*(?:reviews?|vlerësi|vlerësime)',  # "5 reviews" or "5 vlerësime"
+                        r'(\d+)\s*(?:opinione?|komente?)',          # "5 opinione" 
+                        r'(\d+)\s*(?:recensione?)',                 # "5 recensioni"
+                    ]
+                    
+                    for pattern in patterns:
+                        match = re.search(pattern, text, re.IGNORECASE)
+                        if match:
+                            return match.group(1)
+                    
+                    # Handle "00 Vlerësime" case specifically 
+                    if "vlerësime" in text.lower():
+                        # Extract the number before "Vlerësime"
+                        count_match = re.search(r'(\d+)\s*vlerësime', text, re.IGNORECASE)
+                        if count_match:
+                            return count_match.group(1)
+                    
+                    # Look for just numbers in review contexts
+                    if any(word in text.lower() for word in ['vlerësi', 'review', 'opinione', 'koment']):
+                        number_match = re.search(r'(\d+)', text)
+                        if number_match:
+                            return number_match.group(1)
+            except Exception:
+                continue
+        
+        return self._extract_by_selectors(soup, SELECTORS["reviews_count"])
+    
     def _extract_images(self, soup: BeautifulSoup) -> List[str]:
+        """Extract product images from the page"""
         images = []
         
         for selector in SELECTORS["images"]:
@@ -441,6 +634,7 @@ class GjirafaScraper:
         return DataValidator.clean_image_urls(images, self.base_url)
     
     def _extract_specifications(self, soup: BeautifulSoup) -> Dict[str, str]:
+        """Extract product specifications from the page"""
         for selector in SELECTORS["specifications"]:
             try:
                 spec_element = soup.select_one(selector)
@@ -451,6 +645,7 @@ class GjirafaScraper:
         return {}
     
     def _extract_category(self, soup: BeautifulSoup) -> str:
+        """Extract product category from breadcrumbs or page structure"""
         for selector in SELECTORS["category"]:
             try:
                 element = soup.select_one(selector)
@@ -464,139 +659,6 @@ class GjirafaScraper:
             except Exception:
                 continue
         return ""
-    
-    def scrape_products(self, 
-                       urls: List[str] = None, 
-                       max_products: int = None,
-                       save_interval: int = 100) -> List[Dict[str, Any]]:
-        
-        if not urls:
-            logger.info("No URLs provided, discovering products automatically...")
-            urls = self._discover_all_products()
-        
-        if max_products:
-            urls = urls[:max_products]
-        
-        logger.info(f"Starting to scrape {len(urls)} products")
-        
-        scraped_products = []
-        failed_urls = []
-        
-        with tqdm(total=len(urls), desc="Scraping products") as pbar:
-            for i, url in enumerate(urls):
-                if url in self.scraped_urls:
-                    pbar.update(1)
-                    continue
-                
-                try:
-                    product_data = self.extract_product_data(url)
-                    if product_data:
-                        scraped_products.append(product_data)
-                        self.scraped_urls.add(url)
-                    else:
-                        failed_urls.append(url)
-                    
-                    if (i + 1) % save_interval == 0:
-                        self._save_progress(scraped_products, f"progress_{i+1}")
-                    
-                    time.sleep(self.config.REQUEST_DELAY)
-                    
-                except Exception as e:
-                    logger.error(f"Error scraping {url}: {e}")
-                    failed_urls.append(url)
-                
-                pbar.update(1)
-        
-        logger.info(f"Scraping completed. Success: {len(scraped_products)}, Failed: {len(failed_urls)}")
-        
-        if failed_urls:
-            logger.info(f"Failed URLs: {failed_urls[:10]}...") 
-        
-        self.products.extend(scraped_products)
-        return scraped_products
-    def _discover_all_products(self) -> List[str]:
-        all_product_urls = []
-        
-        category_urls = self.discover_category_urls()
-        
-        if not category_urls:
-            from config import CATEGORY_URLS
-            category_urls = [self.base_url + cat for cat in CATEGORY_URLS]
-            logger.info(f"Using predefined categories: {len(category_urls)}")
-        
-        logger.info(f"Discovering products from {len(category_urls)} categories")
-        
-        for category_url in category_urls:
-            try:
-                products = self.discover_product_urls(category_url, max_pages=5)
-                all_product_urls.extend(products)
-                logger.info(f"Found {len(products)} products in {category_url}")
-                
-                time.sleep(self.config.REQUEST_DELAY)
-                
-            except Exception as e:
-                logger.error(f"Error discovering products from {category_url}: {e}")
-        
-        all_product_urls = list(set(all_product_urls))
-        logger.info(f"Total unique products discovered: {len(all_product_urls)}")
-        
-        return all_product_urls
-    
-    def _save_progress(self, data: List[Dict], filename_prefix: str) -> None:
-        try:
-            filename = f"{self.config.OUTPUT_DIR}/{filename_prefix}_{int(time.time())}.json"
-            DataExporter.export_to_json(data, filename)
-        except Exception as e:
-            logger.error(f"Error saving progress: {e}")
-    
-    def export_data(self, 
-                   data: List[Dict] = None, 
-                   formats: List[str] = None,
-                   filename_prefix: str = "gjirafa_products") -> Dict[str, str]:
-        
-        if data is None:
-            data = self.products
-        
-        if not data:
-            logger.warning("No data to export")
-            return {}
-        
-        if formats is None:
-            formats = ['json', 'csv']
-        
-        exported_files = {}
-        timestamp = int(time.time())
-        
-        for format_type in formats:
-            try:
-                filename = f"{self.config.OUTPUT_DIR}/{filename_prefix}_{timestamp}.{format_type}"
-                
-                if format_type == 'json':
-                    success = DataExporter.export_to_json(data, filename)
-                elif format_type == 'csv':
-                    success = DataExporter.export_to_csv(data, filename)
-                elif format_type == 'excel':
-                    filename = filename.replace('.excel', '.xlsx')
-                    success = DataExporter.export_to_excel(data, filename)
-                else:
-                    logger.warning(f"Unsupported format: {format_type}")
-                    continue
-                
-                if success:
-                    exported_files[format_type] = filename
-                
-            except Exception as e:
-                logger.error(f"Error exporting to {format_type}: {e}")
-        
-        try:
-            summary = DataExporter.generate_summary_report(data)
-            summary_file = f"{self.config.OUTPUT_DIR}/{filename_prefix}_summary_{timestamp}.json"
-            DataExporter.export_to_json([summary], summary_file)
-            exported_files['summary'] = summary_file
-        except Exception as e:
-            logger.error(f"Error generating summary: {e}")
-        
-        return exported_files
     
     def close(self) -> None:
         try:
@@ -613,3 +675,54 @@ class GjirafaScraper:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+    def export_data(self, data: List[Dict[str, Any]] = None, output_dir: str = "scraped_data", 
+                   formats: List[str] = None, filename_prefix: str = None) -> Dict[str, str]:
+        """Export scraped product data to various formats"""
+        if formats is None:
+            formats = ['json', 'csv']
+        
+        # Use provided data or fallback to stored products
+        products = data if data is not None else self.products
+        
+        if not products:
+            logger.warning("No products to export")
+            return {}
+        
+        from pathlib import Path
+        import os
+        from datetime import datetime
+        
+        # Ensure output directory exists
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        
+        # Generate timestamp for filenames
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if filename_prefix:
+            base_filename = f"{filename_prefix}_{timestamp}"
+        else:
+            base_filename = f"gjirafa_products_{timestamp}"
+        
+        exported_files = {}
+        
+        # Export to JSON
+        if 'json' in formats:
+            json_file = os.path.join(output_dir, f"{base_filename}.json")
+            if DataExporter.export_to_json(products, json_file):
+                exported_files['json'] = json_file
+                logger.info(f"Exported to JSON: {json_file}")
+        
+        # Export to CSV
+        if 'csv' in formats:
+            csv_file = os.path.join(output_dir, f"{base_filename}.csv")
+            if DataExporter.export_to_csv(products, csv_file):
+                exported_files['csv'] = csv_file
+                logger.info(f"Exported to CSV: {csv_file}")
+        
+        # Export to Excel
+        if 'excel' in formats or 'xlsx' in formats:
+            excel_file = os.path.join(output_dir, f"{base_filename}.xlsx")
+            if DataExporter.export_to_excel(products, excel_file):
+                exported_files['excel'] = excel_file
+                logger.info(f"Exported to Excel: {excel_file}")
+        
+        return exported_files

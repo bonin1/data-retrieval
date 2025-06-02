@@ -1,536 +1,385 @@
+"""
+Advanced Analytics Module
+Statistical analysis and data insights for e-commerce data
+"""
+
 import pandas as pd
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')  
-import matplotlib.pyplot as plt
-import seaborn as sns
-import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import scipy.stats as stats
+from scipy.stats import pearsonr, spearmanr, chi2_contingency
 import warnings
-warnings.filterwarnings('ignore')
-
-from scipy import stats
-from scipy.cluster.hierarchy import dendrogram, linkage
-import statsmodels.api as sm
-from statsmodels.tsa.seasonal import seasonal_decompose
-from statsmodels.tsa.arima.model import ARIMA
-import pingouin as pg
-
-from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
-from sklearn.preprocessing import StandardScaler, LabelEncoder, MinMaxScaler
-from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, IsolationForest
-from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-from sklearn.metrics import mean_squared_error, r2_score, silhouette_score
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-import xgboost as xgb
-import lightgbm as lgb
-
-from textblob import TextBlob
-from wordcloud import WordCloud
-import re
-from collections import Counter
-
-from prophet import Prophet
-
-import json
 import logging
-from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Dict, List, Any, Tuple, Optional
-import joblib
+from datetime import datetime, timedelta
 
+warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class AdvancedAnalytics:
-    def __init__(self, data_path: str = None, data: pd.DataFrame = None):
-        self.data_path = data_path
-        self.raw_data = None
-        self.processed_data = None
-        self.models = {}
-        self.results = {}
-        
-        if data is not None:
-            self.raw_data = data
-        elif data_path:
-            self.load_data(data_path)
+    """Advanced statistical analysis for e-commerce data"""
     
-    def load_data(self, path: str) -> pd.DataFrame:
-        """Load data from file"""
+    def __init__(self, data: pd.DataFrame):
+        """Initialize with processed data"""
+        self.data = data.copy()
+        self.processed_data = None
+        self.analysis_results = {}
+        
+    def preprocess_data(self):
+        """Preprocess data for analysis"""
+        logger.info("Preprocessing data for advanced analytics...")
+        
         try:
-            if path.endswith('.json'):
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                self.raw_data = pd.DataFrame(data)
-            elif path.endswith('.csv'):
-                self.raw_data = pd.read_csv(path)
-            else:
-                raise ValueError("Unsupported file format. Use JSON or CSV.")
+            df = self.data.copy()
             
-            logger.info(f"Loaded {len(self.raw_data)} records from {path}")
-            return self.raw_data
+            # Handle numeric columns
+            numeric_cols = ['price', 'rating', 'reviews_count', 'original_price', 'discount_percentage']
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Create derived features
+            if 'price' in df.columns and 'original_price' in df.columns:
+                df['discount_amount'] = df['original_price'] - df['price']
+                df['has_discount'] = (df['discount_amount'] > 0).astype(int)
+            
+            if 'rating' in df.columns:
+                df['rating_category'] = pd.cut(df['rating'], 
+                                             bins=[0, 2, 3, 4, 5], 
+                                             labels=['Poor', 'Fair', 'Good', 'Excellent'])
+            
+            # Text length features
+            text_cols = ['title', 'description']
+            for col in text_cols:
+                if col in df.columns:
+                    df[f'{col}_length'] = df[col].astype(str).str.len()
+                    df[f'{col}_word_count'] = df[col].astype(str).str.split().str.len()
+            
+            self.processed_data = df
+            logger.info(f"Preprocessed data with {len(df.columns)} features")
             
         except Exception as e:
-            logger.error(f"Error loading data: {e}")
-            raise
-    
-    def preprocess_data(self) -> pd.DataFrame:
-        if self.raw_data is None:
-            raise ValueError("No data loaded")
-        
-        df = self.raw_data.copy()
-        df['price'] = pd.to_numeric(df['price'], errors='coerce')
-        
-        if 'original_price' in df.columns:
-            df['original_price'] = pd.to_numeric(df['original_price'], errors='coerce')
-        else:
-            df['original_price'] = df['price'] * np.random.uniform(1.0, 1.3, len(df))
-        
-        df['rating'] = pd.to_numeric(df['rating'], errors='coerce')
-        df['reviews_count'] = pd.to_numeric(df['reviews_count'], errors='coerce')
-        
-        df['has_discount'] = (df['original_price'] > df['price']).astype(int)
-        df['discount_amount'] = df['original_price'] - df['price']
-        df['discount_percentage'] = (df['discount_amount'] / df['original_price']) * 100
-        df['price_log'] = np.log1p(df['price'].fillna(0))
-        
-        df['title_length'] = df['title'].str.len()
-        df['description_length'] = df['description'].str.len()
-        df['word_count'] = df['title'].str.split().str.len()
-        
-        le_brand = LabelEncoder()
-        le_category = LabelEncoder()
-        
-        df['brand_encoded'] = le_brand.fit_transform(df['brand'].fillna('Unknown'))
-        df['category_encoded'] = le_category.fit_transform(df['category'].fillna('Unknown'))
-        
-        if 'scraped_at' in df.columns:
-            df['scraped_at'] = pd.to_datetime(df['scraped_at'])
-            df['hour'] = df['scraped_at'].dt.hour
-            df['day_of_week'] = df['scraped_at'].dt.dayofweek
-            df['month'] = df['scraped_at'].dt.month
-        if 'price' in df.columns:
-            df['price'] = pd.to_numeric(df['price'], errors='coerce')
-            
-            if df['price'].notna().any() and df['price'].max() > df['price'].min():
-                try:
-                    df['price_category'] = pd.cut(df['price'], bins=5, labels=['Very Low', 'Low', 'Medium', 'High', 'Very High'])
-                except (ValueError, TypeError):
-                    df['price_category'] = pd.qcut(df['price'].rank(method='first'), q=4, 
-                                                 labels=['Low', 'Medium', 'High', 'Very High'], duplicates='drop')
-            else:
-                df['price_category'] = 'Medium'
-        quality_factors = []
-        
-        possible_factors = ['price', 'description', 'rating', 'reviews_count', 'images', 'title', 'brand', 'category']
-        for factor in possible_factors:
-            if factor in df.columns:
-                quality_factors.append(factor)
-        
-        if quality_factors:
-            df['data_quality_score'] = 0
-            for factor in quality_factors:
-                df['data_quality_score'] += (~df[factor].isna()).astype(int)
-            
-            df['data_quality_score'] = df['data_quality_score'] / len(quality_factors)
-        else:
-            df['data_quality_score'] = 0.5
-        
-        self.processed_data = df
-        logger.info(f"Preprocessed data with {df.shape[1]} features")
-        return df
+            logger.error(f"Preprocessing error: {e}")
+            self.processed_data = self.data.copy()
     
     def descriptive_statistics(self) -> Dict[str, Any]:
+        """Comprehensive descriptive statistics"""
+        if self.processed_data is None:
+            self.preprocess_data()
+        
+        results = {}
+        df = self.processed_data
+        
+        # Numeric column analysis
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        
+        for col in numeric_cols:
+            if col in df.columns and not df[col].isna().all():
+                col_data = df[col].dropna()
+                
+                if len(col_data) > 0:
+                    results[f'{col}_analysis'] = {
+                        'count': len(col_data),
+                        'mean': float(col_data.mean()),
+                        'median': float(col_data.median()),
+                        'std': float(col_data.std()),
+                        'min': float(col_data.min()),
+                        'max': float(col_data.max()),
+                        'skewness': float(col_data.skew()),
+                        'kurtosis': float(col_data.kurtosis()),
+                        'percentile_25': float(col_data.quantile(0.25)),
+                        'percentile_75': float(col_data.quantile(0.75)),
+                        'iqr': float(col_data.quantile(0.75) - col_data.quantile(0.25))
+                    }
+        
+        # Categorical analysis
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns
+        
+        for col in categorical_cols:
+            if col in df.columns and not df[col].isna().all():
+                value_counts = df[col].value_counts()
+                
+                results[f'{col}_distribution'] = {
+                    'unique_values': len(value_counts),
+                    'most_common': value_counts.head(5).to_dict(),
+                    'null_count': int(df[col].isna().sum()),
+                    'null_percentage': float((df[col].isna().sum() / len(df)) * 100)
+                }
+        
+        return results
+    
+    def correlation_analysis(self) -> Dict[str, Any]:
+        """Correlation analysis between variables"""
         if self.processed_data is None:
             self.preprocess_data()
         
         df = self.processed_data
-        stats_results = {}
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
         
-        numerical_cols = df.select_dtypes(include=[np.number]).columns
-        stats_results['numerical_summary'] = df[numerical_cols].describe()
+        if len(numeric_cols) < 2:
+            return {'error': 'Not enough numeric columns for correlation analysis'}
         
-        categorical_cols = df.select_dtypes(include=['object']).columns
-        stats_results['categorical_summary'] = {}
+        # Calculate correlation matrices
+        pearson_corr = df[numeric_cols].corr(method='pearson')
+        spearman_corr = df[numeric_cols].corr(method='spearman')
         
-        for col in categorical_cols:
-            if col in ['title', 'description', 'url']: 
-                continue
-            stats_results['categorical_summary'][col] = df[col].value_counts().head(10)
+        # Find strong correlations
+        strong_correlations = []
+        for i in range(len(pearson_corr.columns)):
+            for j in range(i+1, len(pearson_corr.columns)):
+                col1, col2 = pearson_corr.columns[i], pearson_corr.columns[j]
+                pearson_val = pearson_corr.iloc[i, j]
+                spearman_val = spearman_corr.iloc[i, j]
+                
+                if abs(pearson_val) > 0.5:  # Strong correlation threshold
+                    strong_correlations.append({
+                        'variable1': col1,
+                        'variable2': col2,
+                        'pearson_correlation': float(pearson_val),
+                        'spearman_correlation': float(spearman_val)
+                    })
         
-        if 'price' in df.columns:
-            price_data = df['price'].dropna()
-            stats_results['price_analysis'] = {
-                'mean': price_data.mean(),
-                'median': price_data.median(),
-                'std': price_data.std(),
-                'skewness': stats.skew(price_data),
-                'kurtosis': stats.kurtosis(price_data),
-                'quartiles': price_data.quantile([0.25, 0.5, 0.75]).to_dict()
-            }
+        return {
+            'pearson_correlation_matrix': pearson_corr.to_dict(),
+            'spearman_correlation_matrix': spearman_corr.to_dict(),
+            'strong_correlations': strong_correlations
+        }
+    
+    def detect_outliers(self) -> Dict[str, Any]:
+        """Detect outliers using multiple methods"""
+        if self.processed_data is None:
+            self.preprocess_data()
         
-        missing_analysis = df.isnull().sum()
-        stats_results['missing_values'] = missing_analysis[missing_analysis > 0].to_dict()
+        df = self.processed_data
+        outlier_results = {}
         
-        correlation_matrix = df[numerical_cols].corr()
-        stats_results['correlation_matrix'] = correlation_matrix
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
         
-        self.results['descriptive_stats'] = stats_results
-        return stats_results
+        for col in numeric_cols:
+            if col in df.columns and not df[col].isna().all():
+                col_data = df[col].dropna()
+                
+                if len(col_data) > 0:
+                    # IQR method
+                    Q1 = col_data.quantile(0.25)
+                    Q3 = col_data.quantile(0.75)
+                    IQR = Q3 - Q1
+                    lower_bound = Q1 - 1.5 * IQR
+                    upper_bound = Q3 + 1.5 * IQR
+                    
+                    iqr_outliers = col_data[(col_data < lower_bound) | (col_data > upper_bound)]
+                    
+                    # Z-score method
+                    z_scores = np.abs(stats.zscore(col_data))
+                    zscore_outliers = col_data[z_scores > 3]
+                    
+                    outlier_results[f'{col}_outliers'] = {
+                        'iqr_method': {
+                            'count': len(iqr_outliers),
+                            'percentage': (len(iqr_outliers) / len(col_data)) * 100,
+                            'values': iqr_outliers.tolist()[:10]  # First 10 outliers
+                        },
+                        'zscore_method': {
+                            'count': len(zscore_outliers),
+                            'percentage': (len(zscore_outliers) / len(col_data)) * 100,
+                            'values': zscore_outliers.tolist()[:10]
+                        },
+                        'bounds': {
+                            'iqr_lower': float(lower_bound),
+                            'iqr_upper': float(upper_bound)
+                        }
+                    }
+        
+        return outlier_results
     
     def price_analysis(self) -> Dict[str, Any]:
+        """Detailed price analysis"""
+        if self.processed_data is None:
+            self.preprocess_data()
+        
         df = self.processed_data
-        price_results = {}
+        
+        if 'price' not in df.columns:
+            return {'error': 'Price column not found'}
         
         price_data = df['price'].dropna()
         
-        shapiro_stat, shapiro_p = stats.shapiro(price_data.sample(min(5000, len(price_data))))
-        price_results['normality_test'] = {
-            'statistic': shapiro_stat,
-            'p_value': shapiro_p,
-            'is_normal': shapiro_p > 0.05
+        if len(price_data) == 0:
+            return {'error': 'No valid price data'}
+        
+        results = {
+            'basic_stats': {
+                'mean': float(price_data.mean()),
+                'median': float(price_data.median()),
+                'std': float(price_data.std()),
+                'min': float(price_data.min()),
+                'max': float(price_data.max())
+            },
+            'price_ranges': {
+                'under_50': len(price_data[price_data < 50]),
+                '50_to_100': len(price_data[(price_data >= 50) & (price_data < 100)]),
+                '100_to_500': len(price_data[(price_data >= 100) & (price_data < 500)]),
+                'over_500': len(price_data[price_data >= 500])
+            }
         }
         
+        # Price by category analysis
         if 'category' in df.columns:
-            category_prices = df.groupby('category')['price'].agg(['mean', 'median', 'std', 'count'])
-            price_results['category_analysis'] = category_prices.to_dict()
-            
-            categories = df['category'].dropna().unique()
-            if len(categories) > 1:
-                category_groups = [df[df['category'] == cat]['price'].dropna() for cat in categories]
-                category_groups = [group for group in category_groups if len(group) > 0]
-                
-                if len(category_groups) > 1:
-                    f_stat, p_value = stats.f_oneway(*category_groups)
-                    price_results['category_anova'] = {
-                        'f_statistic': f_stat,
-                        'p_value': p_value,
-                        'significant_difference': p_value < 0.05
-                    }
+            category_prices = df.groupby('category')['price'].agg(['mean', 'median', 'count']).round(2)
+            results['price_by_category'] = category_prices.to_dict()
         
-        price_features = ['brand_encoded', 'category_encoded', 'title_length', 'word_count', 'data_quality_score']
-        available_features = [f for f in price_features if f in df.columns]
+        # Price by brand analysis
+        if 'brand' in df.columns:
+            brand_prices = df.groupby('brand')['price'].agg(['mean', 'median', 'count']).round(2)
+            # Get top 10 brands by count
+            top_brands = brand_prices.nlargest(10, 'count')
+            results['price_by_brand'] = top_brands.to_dict()
         
-        if available_features and not df['price'].isna().all():
-            feature_data = df[available_features + ['price']].dropna()
-            
-            if len(feature_data) > 10:
-                X = feature_data[available_features]
-                y = feature_data['price']
-                
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-                
-                models = {
-                    'linear_regression': LinearRegression(),
-                    'random_forest': RandomForestRegressor(n_estimators=100, random_state=42),
-                    'xgboost': xgb.XGBRegressor(n_estimators=100, random_state=42)
-                }
-                
-                model_results = {}
-                for name, model in models.items():
-                    model.fit(X_train, y_train)
-                    y_pred = model.predict(X_test)
-                    
-                    model_results[name] = {
-                        'mse': mean_squared_error(y_test, y_pred),
-                        'r2': r2_score(y_test, y_pred),
-                        'rmse': np.sqrt(mean_squared_error(y_test, y_pred))
-                    }
-                    
-                    self.models[f'price_prediction_{name}'] = model
-                
-                price_results['prediction_models'] = model_results
-        
-        self.results['price_analysis'] = price_results
-        return price_results
+        return results
     
-    def customer_segmentation(self) -> Dict[str, Any]:
+    def market_segmentation(self) -> Dict[str, Any]:
+        """Market segmentation analysis"""
+        if self.processed_data is None:
+            self.preprocess_data()
+        
         df = self.processed_data
-        segmentation_results = {}
+        results = {}
         
-        feature_cols = ['price', 'rating', 'reviews_count', 'title_length', 'data_quality_score']
-        available_cols = [col for col in feature_cols if col in df.columns and not df[col].isna().all()]
-        
-        if len(available_cols) >= 2:
-            cluster_data = df[available_cols].dropna()
-            
-            if len(cluster_data) > 10:
-                scaler = StandardScaler()
-                scaled_data = scaler.fit_transform(cluster_data)
-                
-                inertias = []
-                silhouette_scores = []
-                k_range = range(2, min(11, len(cluster_data)//2))
-                
-                for k in k_range:
-                    kmeans = KMeans(n_clusters=k, random_state=42)
-                    labels = kmeans.fit_predict(scaled_data)
-                    inertias.append(kmeans.inertia_)
-                    silhouette_scores.append(silhouette_score(scaled_data, labels))
-                
-                optimal_k = k_range[np.argmax(silhouette_scores)]
-                
-                kmeans = KMeans(n_clusters=optimal_k, random_state=42)
-                cluster_labels = kmeans.fit_predict(scaled_data)
-                
-                df_clustered = cluster_data.copy()
-                df_clustered['cluster'] = cluster_labels
-                
-                cluster_analysis = df_clustered.groupby('cluster').agg({
-                    col: ['mean', 'median', 'std'] for col in available_cols
-                }).round(2)
-                
-                segmentation_results['kmeans_clustering'] = {
-                    'optimal_k': optimal_k,
-                    'silhouette_score': silhouette_scores[optimal_k - 2],
-                    'cluster_analysis': cluster_analysis.to_dict(),
-                    'cluster_sizes': pd.Series(cluster_labels).value_counts().to_dict()
-                }
-                
-                self.models['clustering_scaler'] = scaler
-                self.models['clustering_kmeans'] = kmeans
-                
-                dbscan = DBSCAN(eps=0.5, min_samples=5)
-                dbscan_labels = dbscan.fit_predict(scaled_data)
-                
-                outliers = np.sum(dbscan_labels == -1)
-                segmentation_results['outlier_detection'] = {
-                    'outliers_count': int(outliers),
-                    'outliers_percentage': (outliers / len(scaled_data)) * 100
-                }
-        
-        self.results['segmentation'] = segmentation_results
-        return segmentation_results
-    
-    def sentiment_analysis(self) -> Dict[str, Any]:
-        df = self.processed_data
-        sentiment_results = {}
-        
-        if 'title' in df.columns:
-            titles = df['title'].dropna()
-            
-            sentiments = []
-            polarities = []
-            subjectivities = []
-            
-            for title in titles:
-                blob = TextBlob(str(title))
-                sentiment = blob.sentiment
-                sentiments.append('positive' if sentiment.polarity > 0.1 
-                                else 'negative' if sentiment.polarity < -0.1 
-                                else 'neutral')
-                polarities.append(sentiment.polarity)
-                subjectivities.append(sentiment.subjectivity)
-            
-            sentiment_results['title_sentiment'] = {
-                'sentiment_distribution': pd.Series(sentiments).value_counts().to_dict(),
-                'average_polarity': np.mean(polarities),
-                'average_subjectivity': np.mean(subjectivities)
-            }
-            
-            all_words = ' '.join(titles).lower()
-            all_words = re.sub(r'[^a-zA-Z\s]', '', all_words)
-            words = all_words.split()
-            
-            stop_words = set(['dhe', 'per', 'me', 'nga', 'ne', 'te', 'se', 'nje', 'i', 'e', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'])
-            filtered_words = [word for word in words if word not in stop_words and len(word) > 2]
-            
-            word_freq = Counter(filtered_words)
-            sentiment_results['word_frequency'] = dict(word_freq.most_common(20))
-        
-        self.results['sentiment_analysis'] = sentiment_results
-        return sentiment_results
-    
-    def anomaly_detection(self) -> Dict[str, Any]:
-        df = self.processed_data
-        anomaly_results = {}
-        
+        # Price segmentation
         if 'price' in df.columns:
             price_data = df['price'].dropna()
+            price_segments = pd.qcut(price_data, q=4, labels=['Budget', 'Mid-Range', 'Premium', 'Luxury'])
             
-            Q1 = price_data.quantile(0.25)
-            Q3 = price_data.quantile(0.75)
-            IQR = Q3 - Q1
-            lower_bound = Q1 - 1.5 * IQR
-            upper_bound = Q3 + 1.5 * IQR
-            
-            price_outliers = price_data[(price_data < lower_bound) | (price_data > upper_bound)]
-            
-            anomaly_results['price_outliers'] = {
-                'count': len(price_outliers),
-                'percentage': (len(price_outliers) / len(price_data)) * 100,
-                'outlier_values': price_outliers.tolist()[:10] 
+            results['price_segments'] = {
+                'distribution': price_segments.value_counts().to_dict(),
+                'segment_stats': df.groupby(price_segments)['price'].agg(['mean', 'count']).to_dict()
             }
-            
-            feature_cols = ['price', 'rating', 'reviews_count', 'title_length']
-            available_cols = [col for col in feature_cols if col in df.columns]
-            
-            if len(available_cols) >= 2:
-                anomaly_data = df[available_cols].dropna()
+        
+        # Rating segmentation
+        if 'rating' in df.columns:
+            rating_data = df['rating'].dropna()
+            if len(rating_data) > 0:
+                rating_segments = pd.cut(rating_data, bins=[0, 2, 3, 4, 5], 
+                                       labels=['Poor', 'Fair', 'Good', 'Excellent'])
                 
-                if len(anomaly_data) > 10:
-                    isolation_forest = IsolationForest(contamination=0.1, random_state=42)
-                    anomaly_labels = isolation_forest.fit_predict(anomaly_data)
-                    
-                    anomalies = anomaly_data[anomaly_labels == -1]
-                    
-                    anomaly_results['multivariate_anomalies'] = {
-                        'count': len(anomalies),
-                        'percentage': (len(anomalies) / len(anomaly_data)) * 100
-                    }
+                results['rating_segments'] = {
+                    'distribution': rating_segments.value_counts().to_dict()
+                }
         
-        self.results['anomaly_detection'] = anomaly_results
-        return anomaly_results
+        return results
     
-    def competitive_analysis(self) -> Dict[str, Any]:
+    def trend_analysis(self) -> Dict[str, Any]:
+        """Analyze trends over time"""
+        if self.processed_data is None:
+            self.preprocess_data()
+        
         df = self.processed_data
-        competitive_results = {}
         
-        if 'brand' in df.columns and 'price' in df.columns:
-            brand_analysis = df.groupby('brand').agg({
-                'price': ['mean', 'median', 'min', 'max', 'count'],
-                'rating': 'mean',
-                'reviews_count': 'sum'
-            }).round(2)
+        # Check for time columns
+        time_cols = [col for col in df.columns if 'scraped' in col.lower() or 'date' in col.lower()]
         
-            brand_counts = df['brand'].value_counts()
-            total_products = len(df)
-            market_share = ((brand_counts / total_products) * 100).round(2)
-            
-            competitive_results['brand_analysis'] = brand_analysis.to_dict()
-            competitive_results['market_share'] = market_share.to_dict()
-            
-            brand_price_stats = df.groupby('brand')['price'].agg(['mean', 'count']).reset_index()
-            overall_mean_price = df['price'].mean()
-            
-            brand_price_stats['price_position'] = brand_price_stats['mean'].apply(
-                lambda x: 'Premium' if x > overall_mean_price * 1.2
-                else 'Budget' if x < overall_mean_price * 0.8
-                else 'Mid-range'
-            )
-            
-            competitive_results['price_positioning'] = brand_price_stats.to_dict()
+        if not time_cols:
+            return {'error': 'No time columns found for trend analysis'}
         
-        self.results['competitive_analysis'] = competitive_results
-        return competitive_results
+        results = {}
+        
+        for time_col in time_cols:
+            try:
+                df[f'{time_col}_dt'] = pd.to_datetime(df[time_col], errors='coerce')
+                
+                if df[f'{time_col}_dt'].notna().any():
+                    # Daily trends
+                    daily_counts = df.groupby(df[f'{time_col}_dt'].dt.date).size()
+                    
+                    results[f'{time_col}_trends'] = {
+                        'daily_average': float(daily_counts.mean()),
+                        'total_days': len(daily_counts),
+                        'max_daily': int(daily_counts.max()),
+                        'min_daily': int(daily_counts.min())
+                    }
+                    
+                    # Price trends over time
+                    if 'price' in df.columns:
+                        daily_prices = df.groupby(df[f'{time_col}_dt'].dt.date)['price'].mean()
+                        
+                        results[f'{time_col}_price_trends'] = {
+                            'average_price_trend': daily_prices.to_dict(),
+                            'price_volatility': float(daily_prices.std())
+                        }
+                        
+            except Exception as e:
+                logger.warning(f"Could not analyze trends for {time_col}: {e}")
+                continue
+        
+        return results
     
     def generate_insights(self) -> Dict[str, Any]:
-        insights = {}
-        
-        self.descriptive_statistics()
-        self.price_analysis()
-        self.customer_segmentation()
-        self.sentiment_analysis()
-        self.anomaly_detection()
-        self.competitive_analysis()
-        
-        insights['key_findings'] = []
-        
-        if 'price_analysis' in self.results:
-            price_data = self.results['price_analysis']
-            if 'category_anova' in price_data and price_data['category_anova']['significant_difference']:
-                insights['key_findings'].append("Significant price differences exist across product categories")
-        
-        if 'segmentation' in self.results:
-            seg_data = self.results['segmentation']
-            if 'kmeans_clustering' in seg_data:
-                k = seg_data['kmeans_clustering']['optimal_k']
-                insights['key_findings'].append(f"Products can be segmented into {k} distinct clusters")
-        
-        if 'sentiment_analysis' in self.results:
-            sent_data = self.results['sentiment_analysis']
-            if 'title_sentiment' in sent_data:
-                avg_polarity = sent_data['title_sentiment']['average_polarity']
-                if avg_polarity > 0.1:
-                    insights['key_findings'].append("Product titles show generally positive sentiment")
-                elif avg_polarity < -0.1:
-                    insights['key_findings'].append("Product titles show generally negative sentiment")
-        
-        if 'anomaly_detection' in self.results:
-            anom_data = self.results['anomaly_detection']
-            if 'price_outliers' in anom_data:
-                outlier_pct = anom_data['price_outliers']['percentage']
-                if outlier_pct > 10:
-                    insights['key_findings'].append(f"High percentage ({outlier_pct:.1f}%) of price outliers detected")
-        
-        if 'competitive_analysis' in self.results:
-            comp_data = self.results['competitive_analysis']
-            if 'market_share' in comp_data:
-                top_brand = max(comp_data['market_share'], key=comp_data['market_share'].get)
-                top_share = comp_data['market_share'][top_brand]
-                insights['key_findings'].append(f"{top_brand} leads market share with {top_share}% of products")
-        
-        insights['analysis_summary'] = {
-            'total_analyses_performed': len(self.results),
-            'data_points_analyzed': len(self.processed_data) if self.processed_data is not None else 0,
-            'models_trained': len(self.models),
-            'generated_at': datetime.now().isoformat()
+        """Generate actionable insights from all analyses"""
+        insights = {
+            'data_quality_insights': [],
+            'market_insights': [],
+            'pricing_insights': [],
+            'recommendations': []
         }
         
-        self.results['insights'] = insights
-        return insights
-    
-    def save_results(self, output_dir: str = "analytics_output"):
-        output_path = Path(output_dir)
-        output_path.mkdir(exist_ok=True)
-        
-        results_file = output_path / "advanced_analytics_results.json"
-        with open(results_file, 'w', encoding='utf-8') as f:
-            json_results = self._convert_numpy_types(self.results)
-            json.dump(json_results, f, indent=2, ensure_ascii=False, default=str)
-        
-        if self.models:
-            models_dir = output_path / "models"
-            models_dir.mkdir(exist_ok=True)
+        try:
+            # Run all analyses
+            desc_stats = self.descriptive_statistics()
+            correlation_results = self.correlation_analysis()
+            outlier_results = self.detect_outliers()
+            price_results = self.price_analysis()
             
-            for model_name, model in self.models.items():
-                model_file = models_dir / f"{model_name}.joblib"
-                joblib.dump(model, model_file)
+            # Data quality insights
+            total_records = len(self.processed_data)
+            
+            # Check data completeness
+            for col in ['price', 'title', 'category']:
+                if col in self.processed_data.columns:
+                    missing_pct = (self.processed_data[col].isna().sum() / total_records) * 100
+                    if missing_pct > 20:
+                        insights['data_quality_insights'].append(
+                            f"High missing data in {col}: {missing_pct:.1f}%"
+                        )
+            
+            # Price insights
+            if 'price_analysis' in locals() and 'basic_stats' in price_results:
+                price_stats = price_results['basic_stats']
+                price_cv = price_stats['std'] / price_stats['mean']  # Coefficient of variation
+                
+                if price_cv > 1:
+                    insights['pricing_insights'].append("High price variability detected")
+                
+                insights['pricing_insights'].append(
+                    f"Average price: €{price_stats['mean']:.2f}, Range: €{price_stats['min']:.2f} - €{price_stats['max']:.2f}"
+                )
+            
+            # Market insights
+            if 'category' in self.processed_data.columns:
+                category_counts = self.processed_data['category'].value_counts()
+                dominant_category = category_counts.index[0]
+                market_share = (category_counts.iloc[0] / total_records) * 100
+                
+                insights['market_insights'].append(
+                    f"Dominant category: {dominant_category} ({market_share:.1f}% market share)"
+                )
+            
+            # Recommendations
+            if 'strong_correlations' in correlation_results:
+                strong_corrs = correlation_results['strong_correlations']
+                if strong_corrs:
+                    insights['recommendations'].append("Strong correlations found - consider feature engineering")
+            
+            # Outlier recommendations
+            outlier_count = 0
+            for col_outliers in outlier_results.values():
+                if isinstance(col_outliers, dict) and 'iqr_method' in col_outliers:
+                    outlier_count += col_outliers['iqr_method']['count']
+            
+            if outlier_count > total_records * 0.1:
+                insights['recommendations'].append("High outlier rate - review data collection process")
+            
+        except Exception as e:
+            logger.error(f"Error generating insights: {e}")
+            insights['error'] = str(e)
         
-        if self.processed_data is not None:
-            data_file = output_path / "processed_data.csv"
-            self.processed_data.to_csv(data_file, index=False)
-        
-        logger.info(f"Results saved to {output_path}")
-        return output_path
-    def _convert_numpy_types(self, obj):
-        """Convert numpy types to native Python types for JSON serialization"""
-        if isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, dict):
-            return {str(key): self._convert_numpy_types(value) for key, value in obj.items()}
-        elif isinstance(obj, list):
-            return [self._convert_numpy_types(item) for item in obj]
-        elif isinstance(obj, tuple):
-            return list(obj) 
-        else:
-            return obj
-
-def main():
-    sample_data = {
-        'title': ['Product A', 'Product B', 'Product C'],
-        'price': [100, 200, 150],
-        'brand': ['Brand1', 'Brand2', 'Brand1'],
-        'category': ['Electronics', 'Clothing', 'Electronics'],
-        'rating': [4.5, 3.8, 4.2],
-        'reviews_count': [100, 50, 75]
-    }
-    
-    df = pd.DataFrame(sample_data)
-    
-    analytics = AdvancedAnalytics(data=df)
-    results = analytics.generate_insights()
-    
-    print("Advanced Analytics Results:")
-    for finding in results['key_findings']:
-        print(f"- {finding}")
-
-if __name__ == "__main__":
-    main()
+        return insights

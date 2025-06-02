@@ -77,27 +77,51 @@ class MLAnalytics:
     
     def _prepare_features(self):
         """Prepare features for machine learning"""
+        # Clean data first to avoid encoder issues
+        self.data = self._clean_data_for_ml()
+        
         # Encode categorical variables
         categorical_columns = self.data.select_dtypes(include=['object']).columns
         
         for col in categorical_columns:
-            if col not in ['title', 'description', 'url', 'scraped_at']:  # Skip text/url columns
-                le = LabelEncoder()
-                self.data[f'{col}_encoded'] = le.fit_transform(self.data[col].fillna('Unknown'))
+            if col not in ['title', 'description', 'url', 'scraped_at', 'scraped_at_str']:  # Skip text/url columns
+                try:
+                    # Ensure column contains only strings
+                    self.data[col] = self.data[col].astype(str).fillna('Unknown')
+                    
+                    # Check if column has valid values for encoding
+                    unique_values = self.data[col].unique()
+                    if len(unique_values) > 1 and not all(val == '' for val in unique_values):
+                        le = LabelEncoder()
+                        self.data[f'{col}_encoded'] = le.fit_transform(self.data[col])
+                    else:
+                        # Skip columns with no meaningful variation
+                        logger.warning(f"Skipping encoding for column {col} - no variation")
+                        
+                except Exception as e:
+                    logger.warning(f"Could not encode column {col}: {e}")
+                    continue
         
         # Create text-based features
         if 'title' in self.data.columns:
-            self.data['title_length'] = self.data['title'].str.len()
-            self.data['word_count'] = self.data['title'].str.split().str.len()
-            self.data['has_brand_in_title'] = self.data.apply(
-                lambda x: 1 if pd.notna(x.get('brand')) and str(x.get('brand')).lower() in str(x.get('title', '')).lower() else 0,
-                axis=1
-            )
+            try:
+                self.data['title_length'] = self.data['title'].astype(str).str.len()
+                self.data['word_count'] = self.data['title'].astype(str).str.split().str.len()
+                self.data['has_brand_in_title'] = self.data.apply(
+                    lambda x: 1 if pd.notna(x.get('brand')) and str(x.get('brand')).lower() in str(x.get('title', '')).lower() else 0,
+                    axis=1
+                )
+            except Exception as e:
+                logger.warning(f"Error creating text features: {e}")
         
         # Create price-based features
         if 'price' in self.data.columns:
-            self.data['price_log'] = np.log1p(self.data['price'].fillna(0))
-            
+            try:
+                price_series = pd.to_numeric(self.data['price'], errors='coerce').fillna(0)
+                self.data['price_log'] = np.log1p(price_series)
+            except Exception as e:
+                logger.warning(f"Error creating price features: {e}")
+        
         if 'original_price' in self.data.columns and 'price' in self.data.columns:
             self.data['discount_amount'] = self.data['original_price'] - self.data['price']
             self.data['discount_percentage'] = (
@@ -130,6 +154,34 @@ class MLAnalytics:
             self.data['is_weekend'] = (self.data['day_of_week'] >= 5).astype(int)
         
         logger.info(f"Feature engineering completed. Dataset shape: {self.data.shape}")
+    
+    def _clean_data_for_ml(self) -> pd.DataFrame:
+        """Clean data specifically for ML to avoid encoder issues"""
+        df = self.data.copy()
+        
+        # Handle columns that might contain lists or complex objects
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                # Check for lists, tuples, or other non-string objects
+                sample_values = df[col].dropna().head(10)
+                if len(sample_values) > 0:
+                    # Convert lists/tuples to strings
+                    if any(isinstance(x, (list, tuple)) for x in sample_values):
+                        df[col] = df[col].apply(
+                            lambda x: ', '.join(map(str, x)) if isinstance(x, (list, tuple))
+                            else str(x) if pd.notna(x) else ''
+                        )
+                    # Convert dicts to strings
+                    elif any(isinstance(x, dict) for x in sample_values):
+                        df[col] = df[col].apply(
+                            lambda x: str(x) if isinstance(x, dict)
+                            else str(x) if pd.notna(x) else ''
+                        )
+                    # Ensure all values are strings
+                    else:
+                        df[col] = df[col].astype(str).fillna('')
+        
+        return df
     
     def price_prediction_models(self) -> Dict[str, Any]:
         """Build multiple price prediction models"""

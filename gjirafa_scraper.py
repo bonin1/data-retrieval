@@ -34,6 +34,8 @@ class GjirafaScraper:
         self.base_url = self.config.BASE_URL
         
         self._init_session()
+        self._load_existing_data()
+    
     def _init_session(self) -> None:
         try:
             self.session = cloudscraper.create_scraper()
@@ -302,7 +304,6 @@ class GjirafaScraper:
         
         logger.info(f"Total discovered products: {len(product_urls)} from {category_url}")
         return product_urls
-    
     def _extract_products_from_page(self) -> List[str]:
         product_urls = []
         
@@ -312,20 +313,98 @@ class GjirafaScraper:
             links = soup.select(selector)
             for link in links:
                 href = link.get('href')
-                if href:
-                    if (href.startswith('/') and 
-                        not href.startswith('//') and
-                        any(product_type in href.lower() for product_type in [
-                            'laptop', 'kompjuter', 'telefon', 'tv', 'monitor', 
-                            'kufje', 'tablet', 'kamera', 'audio', 'gaming'
-                        ]) and
-                        len(href) > 10):
-                        
-                        full_url = URLHelper.normalize_url(href, self.base_url)
-                        if full_url not in product_urls:
-                            product_urls.append(full_url)
+                if href and self._is_valid_product_url(href):
+                    full_url = URLHelper.normalize_url(href, self.base_url)
+                    if full_url not in product_urls:
+                        product_urls.append(full_url)
         
         return product_urls
+    
+    def _is_valid_product_url(self, href: str) -> bool:
+        """Improved validation to distinguish between product and category pages"""
+        
+        # Basic checks
+        if not href.startswith('/') or href.startswith('//'):
+            return False
+        
+        # Exclude obvious non-product URLs
+        exclude_patterns = [
+            '/account/', '/login', '/register', '/cart', '/wishlist',
+            '/faq', '/contact', '/about', '/terms', '/privacy',
+            '/cdn-cgi/', 'mailto:', 'tel:', '#', '/outlet',
+            '/gift-cards', '/cfare-ka-te-re', '/search', '/categories',
+            '/brands', '/offers', '/sale', '/new-arrivals'
+        ]
+        
+        if any(pattern in href.lower() for pattern in exclude_patterns):
+            return False
+        
+        # URL must be reasonably long (products have descriptive URLs)
+        if len(href) < 15:
+            return False
+        
+        # Check if URL contains product keywords
+        product_keywords = [
+            'laptop', 'kompjuter', 'telefon', 'tv', 'monitor', 
+            'kufje', 'tablet', 'kamera', 'audio', 'gaming'
+        ]
+        
+        if not any(keyword in href.lower() for keyword in product_keywords):
+            return False
+        
+        # More sophisticated filtering: product URLs typically have multiple path segments
+        # and contain descriptive text, while category URLs are shorter
+        url_parts = href.strip('/').split('/')
+        
+        # Category pages typically have 1-2 segments, product pages have longer descriptive URLs
+        if len(url_parts) <= 2 and not any(len(part) > 20 for part in url_parts):
+            return False
+        
+        # Product URLs typically contain hyphens (word separators) and model numbers/specs
+        if '-' not in href:
+            return False
+        
+        # Look for signs this is a product URL (model numbers, specs, brands)
+        import re
+        
+        # Check for product-like patterns in URL
+        product_patterns = [
+            r'\b\d+gb\b',           # RAM/storage sizes
+            r'\b\d+tb\b',           # Storage sizes  
+            r'\bi\d+\b',            # Intel processors
+            r'\brtx\d+\b',          # Graphics cards
+            r'\bgtx\d+\b',          # Graphics cards
+            r'\b\d+inch\b',         # Screen sizes
+            r'\b\d+"?\b',           # Screen sizes with quotes
+            r'\b\d+hz\b',           # Refresh rates
+            r'\b\d+mp\b',           # Camera megapixels
+            r'\bwindows\b',         # Operating system
+            r'\bmac\b',             # Apple products
+            r'\bpro\b',             # Product lines
+            r'\bmax\b',             # Product lines
+            r'\bmini\b',            # Product lines
+            r'\bcore\b',            # Processors
+            r'\bamd\b',             # Processors
+            r'\bintel\b',           # Processors
+            r'\bnvidia\b',          # Graphics
+        ]
+        
+        href_lower = href.lower()
+        pattern_matches = sum(1 for pattern in product_patterns if re.search(pattern, href_lower))
+        
+        # If URL has product-like patterns, it's likely a product
+        if pattern_matches >= 2:
+            return True
+        
+        # Additional check: very long URLs with many hyphens are usually products
+        if len(href) > 50 and href.count('-') > 5:
+            return True
+        
+        # If URL has at least one product pattern and is reasonably long, consider it a product
+        if pattern_matches >= 1 and len(href) > 30:
+            return True
+        
+        return False
     
     def _try_traditional_pagination(self, category_url: str, max_pages: int) -> List[str]:
         product_urls = []
@@ -337,7 +416,6 @@ class GjirafaScraper:
                     f"{category_url}/page/{page}",
                     f"{category_url}?p={page}"
                 ]
-                
                 for page_url in page_urls:
                     soup = self.get_page_content(page_url)
                     if not soup:
@@ -348,19 +426,11 @@ class GjirafaScraper:
                         links = soup.select(selector)
                         for link in links:
                             href = link.get('href')
-                            if href:
-                                if (href.startswith('/') and 
-                                    not href.startswith('//') and
-                                    any(product_type in href.lower() for product_type in [
-                                        'laptop', 'kompjuter', 'telefon', 'tv', 'monitor', 
-                                        'kufje', 'tablet', 'kamera', 'audio', 'gaming'
-                                    ]) and
-                                    len(href) > 10): 
-                                    
-                                    full_url = URLHelper.normalize_url(href, self.base_url)
-                                    if full_url not in product_urls:
-                                        product_urls.append(full_url)
-                                        page_products.append(full_url)
+                            if href and self._is_valid_product_url(href):
+                                full_url = URLHelper.normalize_url(href, self.base_url)
+                                if full_url not in product_urls:
+                                    product_urls.append(full_url)
+                                    page_products.append(full_url)
                     
                     if page_products:
                         break
@@ -374,7 +444,6 @@ class GjirafaScraper:
             logger.error(f"Error in traditional pagination: {e}")
         
         return product_urls
-    
     def extract_product_data(self, product_url: str) -> Optional[Dict[str, Any]]:
         try:
             soup = self.get_page_content(product_url, use_selenium=True)
@@ -389,6 +458,11 @@ class GjirafaScraper:
             
             product_data['title'] = self._extract_by_selectors(soup, SELECTORS["title"])
             
+            # Check for duplicates early to avoid unnecessary processing
+            if self._is_duplicate(product_data):
+                logger.info(f"Skipping duplicate product: {product_data.get('title', 'Unknown')[:50]}...")
+                return None
+            
             product_data['price'] = self._extract_price_smart(soup)
             product_data['original_price'] = self._extract_original_price_smart(soup)
             
@@ -398,13 +472,17 @@ class GjirafaScraper:
             
             product_data['specifications'] = self._extract_specifications(soup)
             
-            product_data['brand'] = self._extract_by_selectors(soup, SELECTORS["brand"])
+            product_data['brand'] = self._extract_brand_smart(soup)
             product_data['category'] = self._extract_category(soup)
             product_data['availability'] = self._extract_by_selectors(soup, SELECTORS["availability"])
             product_data['rating'] = self._extract_rating_smart(soup)
             product_data['reviews_count'] = self._extract_reviews_count_smart(soup)
-            
             validated_data = DataValidator.validate_product_data(product_data)
+            
+            # Add to existing products set to prevent future duplicates in this session
+            if hasattr(self, 'existing_products') and 'url' in validated_data and 'title' in validated_data:
+                key = f"{validated_data['url']}|||{validated_data['title']}"
+                self.existing_products.add(key)
             
             logger.info(f"Extracted data for: {validated_data.get('title', 'Unknown')}")
             return validated_data
@@ -726,3 +804,117 @@ class GjirafaScraper:
                 logger.info(f"Exported to Excel: {excel_file}")
         
         return exported_files
+
+    def _load_existing_data(self) -> None:
+        """Load existing scraped data to avoid duplicates"""
+        try:
+            from pathlib import Path
+            data_dir = Path("scraped_data")
+            
+            if not data_dir.exists():
+                logger.info("No existing data directory found")
+                return
+            
+            json_files = list(data_dir.glob("*.json"))
+            existing_products = set()
+            
+            for json_file in json_files:
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    if isinstance(data, list):
+                        for item in data:
+                            if 'url' in item and 'title' in item:
+                                # Create composite key for duplicate detection
+                                key = f"{item['url']}|||{item['title']}"
+                                existing_products.add(key)
+                
+                except Exception as e:
+                    logger.warning(f"Error loading existing data from {json_file}: {e}")
+                    continue
+            
+            self.existing_products = existing_products
+            logger.info(f"Loaded {len(existing_products)} existing products for duplicate detection")
+            
+        except Exception as e:
+            logger.error(f"Error loading existing data: {e}")
+            self.existing_products = set()
+    
+    def _is_duplicate(self, product_data: Dict[str, Any]) -> bool:
+        """Check if a product is a duplicate based on URL and title"""
+        try:
+            if not hasattr(self, 'existing_products'):
+                self.existing_products = set()
+            
+            if 'url' not in product_data or 'title' not in product_data:
+                return False
+            
+            # Create composite key
+            key = f"{product_data['url']}|||{product_data['title']}"
+            
+            # Check against existing products
+            if key in self.existing_products:
+                return True
+            
+            # Check against products scraped in this session
+            if key in {f"{p.get('url', '')}|||{p.get('title', '')}" for p in self.products}:
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking duplicate: {e}")
+            return False
+    
+    def _extract_brand_smart(self, soup: BeautifulSoup) -> str:
+        """Smart brand extraction that looks in title and specific selectors"""
+        
+        # First try the standard selectors
+        brand = self._extract_by_selectors(soup, SELECTORS["brand"])
+        if brand and len(brand) > 1:
+            return brand
+        
+        # If no brand found, extract from title
+        title_element = soup.select_one('h1')
+        if not title_element:
+            title_element = soup.select_one('.product-title')
+        if not title_element:
+            title_element = soup.select_one('.product-name')
+        
+        if title_element:
+            title = title_element.get_text(strip=True)
+            
+            # Common brands found on Gjirafa (case-insensitive)
+            brand_patterns = [
+                # Major computer brands
+                r'\b(Lenovo|HP|Dell|ASUS|Acer|MSI|Apple|Alienware|Razer|Origin|CyberPowerPC)\b',
+                # Phone brands
+                r'\b(Samsung|iPhone|Apple|Xiaomi|Huawei|OnePlus|Google|Sony|Nokia|Oppo|Vivo)\b',
+                # TV/Monitor brands
+                r'\b(LG|Samsung|Sony|TCL|Hisense|Philips|Panasonic|Sharp|Toshiba|AOC|ASUS|Acer|BenQ)\b',
+                # Gaming brands
+                r'\b(Nintendo|PlayStation|Xbox|Steam|Valve|Corsair|Logitech|SteelSeries)\b',
+                # Audio brands
+                r'\b(Sony|Bose|JBL|Sennheiser|Audio-Technica|Beyerdynamic|AKG|Shure|Marshall)\b',
+                # General electronics
+                r'\b(Panasonic|Bosch|Siemens|Canon|Nikon|GoPro|DJI|Fitbit|Garmin)\b'
+            ]
+            
+            for pattern in brand_patterns:
+                import re
+                match = re.search(pattern, title, re.IGNORECASE)
+                if match:
+                    return match.group(1)
+            
+            # Fallback: extract first word that looks like a brand (capitalized, 2+ chars)
+            words = title.split()
+            for word in words[:3]:  # Check first 3 words
+                clean_word = re.sub(r'[^\w]', '', word)
+                if (clean_word and 
+                    len(clean_word) >= 2 and 
+                    clean_word[0].isupper() and 
+                    not clean_word.lower() in ['kompjuter', 'laptop', 'telefon', 'monitor', 'tv', 'kufje']):
+                    return clean_word
+        
+        return ""

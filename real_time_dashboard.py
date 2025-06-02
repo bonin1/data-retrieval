@@ -62,27 +62,52 @@ class RealTimeDashboard:
         # Create output directories
         self.output_dir = Path("dashboard_output")
         self.output_dir.mkdir(exist_ok=True)
-        
-        # ML model cache
+          # ML model cache
         self.model_cache = {}
 
-    def load_latest_data(self) -> pd.DataFrame:
-        """Load the most recent scraped data"""
+    def load_all_data(self) -> pd.DataFrame:
+        """Load and combine all scraped data from the data directory with duplicate detection"""
         try:
-            # Find the latest JSON file
+            # Find all JSON files
             json_files = list(self.data_dir.glob("*.json"))
             
             if not json_files:
                 st.error("No data files found!")
                 return pd.DataFrame()
             
-            # Sort by modification time and get the latest
-            latest_file = max(json_files, key=lambda x: x.stat().st_mtime)
+            all_data = []
+            file_stats = {}
             
-            with open(latest_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            # Load data from all files
+            for json_file in json_files:
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    if data and isinstance(data, list):
+                        # Add source file info to each record
+                        for item in data:
+                            item['source_file'] = json_file.name
+                        
+                        all_data.extend(data)
+                        file_stats[json_file.name] = len(data)
+                        logger.info(f"Loaded {len(data)} records from {json_file.name}")
+                    
+                except Exception as e:
+                    logger.warning(f"Error loading {json_file.name}: {e}")
+                    continue
             
-            df = pd.DataFrame(data)
+            if not all_data:
+                st.warning("No valid data found in any files!")
+                return pd.DataFrame()
+            
+            # Create DataFrame
+            df = pd.DataFrame(all_data)
+            
+            # Remove duplicates based on URL and title combination
+            initial_count = len(df)
+            df = self._remove_duplicates(df)
+            final_count = len(df)
             
             # Fix data types for Arrow compatibility
             df = self._fix_data_types(df)
@@ -91,43 +116,93 @@ class RealTimeDashboard:
             self.cached_data = df
             self.last_update = datetime.now()
             
+            logger.info(f"Combined data: {initial_count} total records, {final_count} after deduplication")
+            logger.info(f"Removed {initial_count - final_count} duplicate products")
+            logger.info(f"File breakdown: {file_stats}")
+            
             return df
             
         except Exception as e:
             st.error(f"Error loading data: {e}")
+            logger.error(f"Data loading error: {e}")
             return pd.DataFrame()
     
     def _fix_data_types(self, df: pd.DataFrame) -> pd.DataFrame:
         """Fix data types for Arrow/Streamlit compatibility"""
         try:
-            # Convert timestamp columns to proper datetime
+            # Make a copy to avoid modifying original
+            df = df.copy()
+            
+            # Handle timestamp columns with complete Arrow compatibility
             if 'scraped_at' in df.columns:
-                df['scraped_at'] = pd.to_datetime(df['scraped_at'])
+                # Convert to datetime first
+                df['scraped_at'] = pd.to_datetime(df['scraped_at'], errors='coerce')
                 
-            # Handle list columns that cause ML issues
+                # Create string version for display
+                df['scraped_at_str'] = df['scraped_at'].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
+                
+                # Remove the original timestamp column to avoid Arrow issues
+                df = df.drop('scraped_at', axis=1)
+                
+                # Create simple date components for analysis
+                temp_dt = pd.to_datetime(df['scraped_at_str'], errors='coerce')
+                df['scraped_date'] = temp_dt.dt.date.astype(str)
+                df['scraped_hour'] = temp_dt.dt.hour.fillna(0).astype('int64')
+                df['scraped_day_of_week'] = temp_dt.dt.day_name().fillna('Unknown')
+                
+            # Handle all object columns that might contain complex data
             for col in df.columns:
                 if df[col].dtype == 'object':
-                    # Check if column contains lists
-                    if df[col].apply(lambda x: isinstance(x, list)).any():
-                        # Convert lists to strings
-                        df[col] = df[col].apply(lambda x: ', '.join(map(str, x)) if isinstance(x, list) else str(x) if pd.notna(x) else '')
-                    
-                    # Clean string columns
-                    elif df[col].dtype == 'object':
-                        df[col] = df[col].astype(str).replace('nan', '')
+                    # Convert everything to string and clean
+                    df[col] = df[col].apply(self._safe_convert_to_string)
+                    # Remove any remaining problematic characters
+                    df[col] = df[col].astype(str).replace(['nan', 'None', 'null', '<NA>'], '')
             
-            # Ensure numeric columns are proper numeric types
-            numeric_candidates = ['price', 'rating', 'reviews_count', 'discount_percentage']
+            # Ensure numeric columns are properly typed
+            numeric_candidates = ['price', 'rating', 'reviews_count', 'discount_percentage', 'original_price']
             for col in numeric_candidates:
                 if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                    # Clean and convert to numeric, then to float64 for Arrow compatibility
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype('float64')
+            
+            # Convert any remaining problematic dtypes
+            for col in df.columns:
+                try:
+                    # Test Arrow conversion
+                    import pyarrow as pa
+                    pa.array(df[col].head(1))
+                except Exception:
+                    logger.warning(f"Converting column {col} to string for Arrow compatibility")
+                    df[col] = df[col].astype(str)
             
             return df
             
         except Exception as e:
             logger.error(f"Error fixing data types: {e}")
+            # Emergency fallback: convert everything to strings
+            for col in df.columns:
+                try:
+                    df[col] = df[col].astype(str)
+                except:
+                    df[col] = ''
             return df
     
+    def _safe_convert_to_string(self, value):
+        """Safely convert any value to string"""
+        try:
+            if pd.isna(value) or value is None:
+                return ''
+            elif isinstance(value, (list, tuple)):
+                return ', '.join(str(x) for x in value)
+            elif isinstance(value, dict):
+                return str(value)
+            elif hasattr(value, 'timestamp'):  # Handle datetime objects
+                return str(value)
+            else:
+                return str(value)
+        except Exception:
+            return ''
+
     def get_data(self, force_refresh: bool = False) -> pd.DataFrame:
         """Get data with caching"""
         if (force_refresh or 
@@ -135,7 +210,7 @@ class RealTimeDashboard:
             self.last_update is None or 
             (datetime.now() - self.last_update).seconds > self.cache_duration):
             
-            return self.load_latest_data()
+            return self.load_all_data()
         
         return self.cached_data
     
@@ -308,45 +383,47 @@ class RealTimeDashboard:
                 st.plotly_chart(fig_brand_price, use_container_width=True)
     
     def create_time_analysis(self, df: pd.DataFrame):
-        """Create time-based analysis"""
-        if 'scraped_at' not in df.columns:
+        """Create time-based analysis using safe timestamp handling"""
+        if 'scraped_at_str' not in df.columns:
             return
         
         st.subheader("⏰ Temporal Analysis")
         
-        # Convert to datetime
-        df['scraped_at'] = pd.to_datetime(df['scraped_at'])
-        df['date'] = df['scraped_at'].dt.date
-        df['hour'] = df['scraped_at'].dt.hour
-        df['day_of_week'] = df['scraped_at'].dt.day_name()
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Daily scraping volume
-            daily_counts = df.groupby('date').size().reset_index(name='count')
-            
-            fig_daily = px.line(
-                daily_counts,
-                x='date',
-                y='count',
-                title="Daily Scraping Volume",
-                labels={'count': 'Products Scraped', 'date': 'Date'}
-            )
-            st.plotly_chart(fig_daily, use_container_width=True)
-        
-        with col2:
-            # Hourly pattern
-            hourly_counts = df.groupby('hour').size()
-            
-            fig_hourly = px.bar(
-                x=hourly_counts.index,
-                y=hourly_counts.values,
-                title="Scraping Activity by Hour",
-                labels={'x': 'Hour of Day', 'y': 'Products Scraped'}
-            )
-            st.plotly_chart(fig_hourly, use_container_width=True)
-    
+        try:
+            # Use the pre-processed time components
+            if 'scraped_date' in df.columns and 'scraped_hour' in df.columns:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Daily scraping volume
+                    if not df['scraped_date'].isna().all():
+                        daily_counts = df['scraped_date'].value_counts().sort_index()
+                        
+                        fig_daily = px.line(
+                            x=daily_counts.index,
+                            y=daily_counts.values,
+                            title="Daily Scraping Volume",
+                            labels={'x': 'Date', 'y': 'Products Scraped'}
+                        )
+                        st.plotly_chart(fig_daily, use_container_width=True)
+                
+                with col2:
+                    # Hourly pattern
+                    if not df['scraped_hour'].isna().all():
+                        hourly_counts = df['scraped_hour'].value_counts().sort_index()
+                        
+                        fig_hourly = px.bar(
+                            x=hourly_counts.index,
+                            y=hourly_counts.values,
+                            title="Scraping Activity by Hour",
+                            labels={'x': 'Hour of Day', 'y': 'Products Scraped'}
+                        )
+                        st.plotly_chart(fig_hourly, use_container_width=True)
+                        
+        except Exception as e:
+            st.error(f"Error in temporal analysis: {e}")
+            logger.error(f"Temporal analysis error: {e}")
+
     def create_quality_metrics(self, df: pd.DataFrame):
         """Create data quality metrics"""
         st.subheader("✅ Data Quality Metrics")
@@ -605,41 +682,70 @@ class RealTimeDashboard:
                         viz_output_dir.mkdir(exist_ok=True)
                         self.visualizer = AdvancedVisualizer(df, str(viz_output_dir))
                     
-                    # Generate visualizations
+                    # Generate visualizations with error handling
                     col1, col2 = st.columns(2)
                     
                     with col1:
                         st.write("**📊 Market Analysis:**")
-                        market_plots = self.visualizer.create_market_analysis_plots()
-                        if market_plots:
-                            for plot_path in market_plots[:2]:  # Show first 2 plots
-                                if Path(plot_path).exists():
-                                    st.image(plot_path, caption=Path(plot_path).stem)
+                        try:
+                            market_plots = self.visualizer.create_market_analysis_plots()
+                            if market_plots:
+                                for plot_path in market_plots[:2]:  # Show first 2 plots
+                                    if Path(plot_path).exists():
+                                        # Verify the file is a valid image
+                                        try:
+                                            Image.open(plot_path)
+                                            st.image(plot_path, caption=Path(plot_path).stem)
+                                        except Exception as img_e:
+                                            st.warning(f"Could not display image: {Path(plot_path).name}")
+                        except Exception as e:
+                            st.warning(f"Market analysis plots failed: {e}")
                     
                     with col2:
                         st.write("**💰 Price Analysis:**")
-                        price_plots = self.visualizer.create_price_distribution_plots()
-                        if price_plots:
-                            for plot_path in price_plots[:2]:  # Show first 2 plots
-                                if Path(plot_path).exists():
-                                    st.image(plot_path, caption=Path(plot_path).stem)
+                        try:
+                            price_plots = self.visualizer.create_price_distribution_plots()
+                            if price_plots:
+                                for plot_path in price_plots[:2]:  # Show first 2 plots
+                                    if Path(plot_path).exists():
+                                        try:
+                                            Image.open(plot_path)
+                                            st.image(plot_path, caption=Path(plot_path).stem)
+                                        except Exception as img_e:
+                                            st.warning(f"Could not display image: {Path(plot_path).name}")
+                        except Exception as e:
+                            st.warning(f"Price analysis plots failed: {e}")
                     
-                    # Quality analysis
+                    # Quality analysis with error handling
                     st.write("**✅ Quality Analysis:**")
-                    quality_plots = self.visualizer.create_quality_analysis_plots()
-                    if quality_plots:
-                        for plot_path in quality_plots[:3]:  # Show first 3 plots
-                            if Path(plot_path).exists():
-                                st.image(plot_path, caption=Path(plot_path).stem)
+                    try:
+                        quality_plots = self.visualizer.create_quality_analysis_plots()
+                        if quality_plots:
+                            for plot_path in quality_plots[:3]:  # Show first 3 plots
+                                if Path(plot_path).exists():
+                                    try:
+                                        Image.open(plot_path)
+                                        st.image(plot_path, caption=Path(plot_path).stem)
+                                    except Exception as img_e:
+                                        st.warning(f"Could not display image: {Path(plot_path).name}")
+                    except Exception as e:
+                        st.warning(f"Quality analysis plots failed: {e}")
                     
-                    # Word cloud
+                    # Word cloud with error handling
                     if 'description' in df.columns or 'title' in df.columns:
                         st.write("**☁️ Word Cloud:**")
-                        wordcloud_plots = self.visualizer.create_wordcloud_visualization()
-                        if wordcloud_plots:
-                            for plot_path in wordcloud_plots:
-                                if Path(plot_path).exists():
-                                    st.image(plot_path, caption="Product Keywords")
+                        try:
+                            wordcloud_plots = self.visualizer.create_wordcloud_visualization()
+                            if wordcloud_plots:
+                                for plot_path in wordcloud_plots:
+                                    if Path(plot_path).exists():
+                                        try:
+                                            Image.open(plot_path)
+                                            st.image(plot_path, caption="Product Keywords")
+                                        except Exception as img_e:
+                                            st.warning(f"Could not display word cloud")
+                        except Exception as e:
+                            st.warning(f"Word cloud generation failed: {e}")
                     
                     st.success("Advanced visualizations generated!")
                     
@@ -1314,6 +1420,40 @@ class RealTimeDashboard:
             if df.select_dtypes(include=[np.number]).columns.any():
                 st.write("**Numeric Columns Summary:**")
                 st.dataframe(df.describe())
+    
+    def _remove_duplicates(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Remove duplicate products based on URL and title combination"""
+        try:
+            if df.empty:
+                return df
+            
+            # Create a composite key for duplicate detection
+            df['duplicate_key'] = df['url'].astype(str) + '|||' + df['title'].astype(str)
+            
+            # Keep track of duplicates for logging
+            duplicates_mask = df.duplicated(subset=['duplicate_key'], keep='first')
+            duplicates_count = duplicates_mask.sum()
+            
+            if duplicates_count > 0:
+                logger.info(f"Found {duplicates_count} duplicate products to remove")
+                
+                # Log some examples of duplicates
+                duplicate_examples = df[duplicates_mask][['title', 'url', 'source_file']].head(3)
+                for _, row in duplicate_examples.iterrows():
+                    logger.info(f"Duplicate: {row['title'][:50]}... from {row['source_file']}")
+            
+            # Remove duplicates
+            df_deduplicated = df.drop_duplicates(subset=['duplicate_key'], keep='first')
+            
+            # Remove the helper column
+            df_deduplicated = df_deduplicated.drop('duplicate_key', axis=1)
+            
+            return df_deduplicated
+            
+        except Exception as e:
+            logger.error(f"Error removing duplicates: {e}")
+            # Return original data if deduplication fails
+            return df
 
 def main():
     """Run the dashboard"""

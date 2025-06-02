@@ -1,23 +1,19 @@
-import pandas as pd
-import numpy as np
 import matplotlib
-matplotlib.use('Agg') 
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import plotly.figure_factory as ff
-import squarify
-from wordcloud import WordCloud
 import warnings
-warnings.filterwarnings('ignore')
-
-from pathlib import Path
-import json
 import logging
-from typing import Dict, List, Any, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Any, Optional
 from datetime import datetime
+import io
+import base64
 
 plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")

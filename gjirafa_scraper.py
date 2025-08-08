@@ -458,7 +458,6 @@ class GjirafaScraper:
             
             product_data['title'] = self._extract_by_selectors(soup, SELECTORS["title"])
             
-            # Check for duplicates early to avoid unnecessary processing
             if self._is_duplicate(product_data):
                 logger.info(f"Skipping duplicate product: {product_data.get('title', 'Unknown')[:50]}...")
                 return None

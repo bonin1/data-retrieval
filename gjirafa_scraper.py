@@ -516,7 +516,6 @@ class GjirafaScraper:
                 element = soup.select_one(selector)
                 if element:
                     price_text = element.get_text(strip=True)
-                    # Extract just the price number with €
                     import re
                     price_match = re.search(r'(\d+(?:\.\d{2})?)\s*€', price_text)
                     if price_match:

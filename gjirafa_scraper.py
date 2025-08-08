@@ -478,7 +478,6 @@ class GjirafaScraper:
             product_data['reviews_count'] = self._extract_reviews_count_smart(soup)
             validated_data = DataValidator.validate_product_data(product_data)
             
-            # Add to existing products set to prevent future duplicates in this session
             if hasattr(self, 'existing_products') and 'url' in validated_data and 'title' in validated_data:
                 key = f"{validated_data['url']}|||{validated_data['title']}"
                 self.existing_products.add(key)
@@ -505,7 +504,6 @@ class GjirafaScraper:
     def _extract_price_smart(self, soup: BeautifulSoup) -> Optional[str]:
         """Smart price extraction that handles complex price structures"""
         
-        # First try to find specific discounted price
         discounted_selectors = [
             ".prices .text-green-600",
             ".prices [class*='green']", 
